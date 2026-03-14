@@ -1,4 +1,4 @@
-"""API 客户端 — LCSC / Mouser / DigiKey。"""
+"""API 客户端 — Mouser / DigiKey。"""
 
 from __future__ import annotations
 
@@ -32,98 +32,6 @@ class BaseClient(ABC):
 
     async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
         return None
-
-
-# ---------------------------------------------------------------------------
-# LCSC 客户端（免费，无需 API key）
-# ---------------------------------------------------------------------------
-
-LCSC_SEARCH_URL = "https://wmsc.lcsc.com/ftps/wm/search/global"
-LCSC_DETAIL_URL = "https://wmsc.lcsc.com/ftps/wm/product/detail"
-
-
-class LCSCClient(BaseClient):
-    """LCSC (立创商城) 非官方前端 API 客户端。"""
-
-    source = "lcsc"
-
-    async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
-        payload = {
-            "keyword": keyword,
-            "currentPage": 1,
-            "pageSize": min(max_results, 20),
-            "searchSource": "home",
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/json",
-        }
-        try:
-            resp = await self._http.post(LCSC_SEARCH_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            return []
-
-        results: list[ComponentResult] = []
-        products = (data.get("result") or {}).get("tipProductDetailUrlVO") or []
-        if not products:
-            products = (data.get("result") or {}).get("productSearchResultVO") or []
-            if isinstance(products, dict):
-                products = products.get("productList") or []
-
-        for item in products[:max_results]:
-            results.append(
-                ComponentResult(
-                    part_number=item.get("productCode") or item.get("productModel") or "",
-                    manufacturer=item.get("brandNameEn") or item.get("brandNameCn") or "",
-                    description=item.get("productDescEn") or item.get("productDescCn") or "",
-                    package=item.get("encapStandard") or "",
-                    unit_price=_safe_float(item.get("productPrice")),
-                    stock=_safe_int(item.get("stockNumber")),
-                    datasheet_url=item.get("pdfUrl") or "",
-                    product_url=f"https://www.lcsc.com/product-detail/{item.get('productCode', '')}.html",
-                    source=self.source,
-                )
-            )
-        return results
-
-    async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
-        headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
-        try:
-            resp = await self._http.post(
-                LCSC_DETAIL_URL,
-                json={"productCode": part_number},
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            return None
-
-        item = (data.get("result") or {})
-        if not item:
-            return None
-
-        params: dict[str, str] = {}
-        for p in item.get("paramVOList") or []:
-            name = p.get("paramNameEn") or p.get("paramNameCn") or ""
-            value = p.get("paramValueEn") or p.get("paramValueCn") or ""
-            if name and value:
-                params[name] = value
-
-        return ComponentResult(
-            part_number=item.get("productCode") or part_number,
-            manufacturer=item.get("brandNameEn") or item.get("brandNameCn") or "",
-            description=item.get("productDescEn") or item.get("productDescCn") or "",
-            package=item.get("encapStandard") or "",
-            unit_price=_safe_float(item.get("productPrice")),
-            stock=_safe_int(item.get("stockNumber")),
-            datasheet_url=item.get("pdfUrl") or "",
-            product_url=f"https://www.lcsc.com/product-detail/{part_number}.html",
-            source=self.source,
-            parameters=params,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -283,14 +191,12 @@ class DigiKeyClient(BaseClient):
 
 def get_clients(source: DataSource = DataSource.ALL) -> list[BaseClient]:
     """根据数据源返回对应客户端列表。"""
-    if source == DataSource.LCSC:
-        return [LCSCClient()]
     if source == DataSource.MOUSER:
         return [MouserClient()]
     if source == DataSource.DIGIKEY:
         return [DigiKeyClient()]
 
-    clients: list[BaseClient] = [LCSCClient()]
+    clients: list[BaseClient] = []
     mouser = MouserClient()
     if mouser.available:
         clients.append(mouser)

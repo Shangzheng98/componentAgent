@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 class DataSource(str, Enum):
     """数据源枚举。"""
 
-    LCSC = "lcsc"
     MOUSER = "mouser"
     DIGIKEY = "digikey"
     ALL = "all"
@@ -28,7 +27,7 @@ class ComponentResult(BaseModel):
     stock: Optional[int] = Field(default=None, description="库存数量")
     datasheet_url: str = Field(default="", description="数据手册链接")
     product_url: str = Field(default="", description="产品页面链接")
-    source: str = Field(default="", description="数据来源 (lcsc/mouser/digikey)")
+    source: str = Field(default="", description="数据来源 (mouser/digikey)")
     parameters: dict[str, str] = Field(default_factory=dict, description="元器件参数")
 
 
@@ -44,4 +43,4 @@ class ComponentDetailInput(BaseModel):
     """详情查询工具的输入参数。"""
 
     part_number: str = Field(description="物料编号")
-    source: DataSource = Field(default=DataSource.LCSC, description="数据源")
+    source: DataSource = Field(default=DataSource.ALL, description="数据源")

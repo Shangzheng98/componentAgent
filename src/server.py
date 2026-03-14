@@ -12,7 +12,7 @@ from .models import ComponentDetailInput, ComponentResult, ComponentSearchInput,
 
 mcp = FastMCP(
     "component-search",
-    description="电子元器件搜索服务 — 支持 LCSC / Mouser / DigiKey 多源查询",
+    description="电子元器件搜索服务 — 支持 Mouser / DigiKey 多源查询",
 )
 
 
@@ -29,12 +29,12 @@ async def search_components(
 ) -> str:
     """搜索电子元器件。
 
-    根据关键词从 LCSC / Mouser / DigiKey 搜索元器件，
+    根据关键词从 Mouser / DigiKey 搜索元器件，
     返回型号、制造商、封装、单价、库存等信息。
 
     Args:
         keyword: 搜索关键词，例如 "STM32F103" 或 "100nF 0603 电容"
-        source: 数据源 (lcsc / mouser / digikey / all)，默认 all
+        source: 数据源 (mouser / digikey / all)，默认 all
         max_results: 每个数据源最大返回条数 (1-20)，默认 5
     """
     params = ComponentSearchInput(
@@ -77,16 +77,15 @@ async def search_components(
 @mcp.tool()
 async def get_component_detail(
     part_number: str,
-    source: str = "lcsc",
+    source: str = "all",
 ) -> str:
     """获取元器件详细参数。
 
     根据物料编号查询元器件的详细参数（电气参数、封装等）。
-    目前仅 LCSC 数据源支持详情查询。
 
     Args:
-        part_number: 物料编号，例如 "C14663"
-        source: 数据源 (lcsc)，默认 lcsc
+        part_number: 物料编号
+        source: 数据源 (mouser / digikey / all)，默认 all
     """
     params = ComponentDetailInput(part_number=part_number, source=DataSource(source))
     clients = get_clients(params.source)
