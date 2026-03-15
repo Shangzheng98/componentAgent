@@ -82,9 +82,12 @@ async def get_component_detail(
     """获取元器件详细参数。
 
     根据物料编号查询元器件的详细参数（电气参数、封装等）。
+    通过 Bing 搜索产品页面并抓取解析参数表格，
+    已知站点（Mouser/DigiKey/LCSC）使用 HTML 规则解析，
+    未知站点自动 fallback 到 LLM 提取（需配置 ANTHROPIC_API_KEY）。
 
     Args:
-        part_number: 物料编号
+        part_number: 物料编号，例如 "STM32F103C8T6" 或 "LM7805"
         source: 数据源 (bing / mouser / digikey / all)，默认 all
     """
     params = ComponentDetailInput(part_number=part_number, source=DataSource(source))

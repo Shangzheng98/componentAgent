@@ -28,7 +28,7 @@ class ComponentResult(BaseModel):
     stock: Optional[int] = Field(default=None, description="库存数量")
     datasheet_url: str = Field(default="", description="数据手册链接")
     product_url: str = Field(default="", description="产品页面链接")
-    source: str = Field(default="", description="数据来源 (mouser/digikey)")
+    source: str = Field(default="", description="数据来源 (bing/mouser/digikey)")
     parameters: dict[str, str] = Field(default_factory=dict, description="元器件参数")
 
 

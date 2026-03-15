@@ -115,6 +115,52 @@ class BingSearchClient(BaseClient):
 
         return results
 
+    async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
+        """先用 Bing 搜索产品页面，再抓取页面解析详细参数。"""
+        if not self.available:
+            return None
+
+        from .parsers import parse_product_page
+
+        # 搜索精确型号，找到产品页面
+        site_query = " OR ".join(f"site:{s}" for s in _COMPONENT_SITES[:5])
+        query = f'"{part_number}" ({site_query})'
+
+        try:
+            resp = await self._http.get(
+                BING_SEARCH_URL,
+                params={"q": query, "count": 5, "mkt": "en-US"},
+                headers={"Ocp-Apim-Subscription-Key": self._api_key},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return None
+
+        web_pages = (data.get("webPages") or {}).get("value") or []
+        if not web_pages:
+            return None
+
+        # 取第一个结果的 URL 去抓取详情
+        product_url = web_pages[0].get("url", "")
+        if not product_url:
+            return None
+
+        parsed = await parse_product_page(product_url, part_number)
+
+        return ComponentResult(
+            part_number=parsed.part_number or part_number,
+            manufacturer=parsed.manufacturer,
+            description=parsed.description,
+            package=parsed.package,
+            unit_price=parsed.unit_price,
+            stock=parsed.stock,
+            datasheet_url=parsed.datasheet_url,
+            product_url=product_url,
+            source=self.source,
+            parameters=parsed.parameters,
+        )
+
 
 def _extract_part_number(text: str) -> str:
     """尝试从文本中提取元器件型号。"""
