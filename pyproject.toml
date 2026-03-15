@@ -1,7 +1,7 @@
 [project]
 name = "component-search-mcp"
 version = "0.1.0"
-description = "元器件搜索 MCP Server - 支持 Mouser / DigiKey"
+description = "元器件垂直搜索 MCP Server - 支持 Bing Search / Mouser / DigiKey"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",

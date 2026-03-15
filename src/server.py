@@ -12,7 +12,7 @@ from .models import ComponentDetailInput, ComponentResult, ComponentSearchInput,
 
 mcp = FastMCP(
     "component-search",
-    description="电子元器件搜索服务 — 支持 Mouser / DigiKey 多源查询",
+    description="电子元器件垂直搜索服务 — 支持 Bing Search / Mouser / DigiKey 多源查询",
 )
 
 
@@ -29,12 +29,12 @@ async def search_components(
 ) -> str:
     """搜索电子元器件。
 
-    根据关键词从 Mouser / DigiKey 搜索元器件，
-    返回型号、制造商、封装、单价、库存等信息。
+    根据关键词搜索元器件，通过 Bing 垂直搜索元器件分销商网站，
+    也可使用 Mouser / DigiKey 官方 API（需配置 API key）。
 
     Args:
         keyword: 搜索关键词，例如 "STM32F103" 或 "100nF 0603 电容"
-        source: 数据源 (mouser / digikey / all)，默认 all
+        source: 数据源 (bing / mouser / digikey / all)，默认 all
         max_results: 每个数据源最大返回条数 (1-20)，默认 5
     """
     params = ComponentSearchInput(
@@ -85,7 +85,7 @@ async def get_component_detail(
 
     Args:
         part_number: 物料编号
-        source: 数据源 (mouser / digikey / all)，默认 all
+        source: 数据源 (bing / mouser / digikey / all)，默认 all
     """
     params = ComponentDetailInput(part_number=part_number, source=DataSource(source))
     clients = get_clients(params.source)

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 class DataSource(str, Enum):
     """数据源枚举。"""
 
+    BING = "bing"
     MOUSER = "mouser"
     DIGIKEY = "digikey"
     ALL = "all"

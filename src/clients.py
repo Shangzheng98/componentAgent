@@ -1,8 +1,9 @@
-"""API 客户端 — Mouser / DigiKey。"""
+"""API 客户端 — Bing Search / Mouser / DigiKey。"""
 
 from __future__ import annotations
 
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -32,6 +33,109 @@ class BaseClient(ABC):
 
     async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Bing Search 客户端（元器件垂直搜索）
+# ---------------------------------------------------------------------------
+
+BING_SEARCH_URL = "https://api.bing.microsoft.com/v7.0/search"
+
+# 元器件分销商站点，用于限定搜索范围提高精准度
+_COMPONENT_SITES = [
+    "mouser.com",
+    "digikey.com",
+    "lcsc.com",
+    "arrow.com",
+    "element14.com",
+    "ti.com",
+    "st.com",
+    "nxp.com",
+    "microchip.com",
+    "onsemi.com",
+]
+
+
+class BingSearchClient(BaseClient):
+    """通过 Bing Web Search API 搜索元器件信息。"""
+
+    source = "bing"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._api_key = os.environ.get("BING_API_KEY", "")
+
+    @property
+    def available(self) -> bool:
+        return bool(self._api_key)
+
+    async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
+        if not self.available:
+            return []
+
+        # 构建垂直搜索 query：加上元器件相关站点限定
+        site_query = " OR ".join(f"site:{s}" for s in _COMPONENT_SITES[:5])
+        query = f"{keyword} electronic component ({site_query})"
+
+        try:
+            resp = await self._http.get(
+                BING_SEARCH_URL,
+                params={"q": query, "count": min(max_results * 2, 30), "mkt": "en-US"},
+                headers={"Ocp-Apim-Subscription-Key": self._api_key},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return []
+
+        results: list[ComponentResult] = []
+        web_pages = (data.get("webPages") or {}).get("value") or []
+
+        for item in web_pages:
+            if len(results) >= max_results:
+                break
+
+            name = item.get("name", "")
+            snippet = item.get("snippet", "")
+            url = item.get("url", "")
+
+            # 尝试从标题/snippet 中提取元器件信息
+            part_number = _extract_part_number(name) or _extract_part_number(snippet) or name
+            manufacturer = _extract_manufacturer(name, snippet)
+
+            results.append(
+                ComponentResult(
+                    part_number=part_number,
+                    manufacturer=manufacturer,
+                    description=snippet[:200] if snippet else name,
+                    product_url=url,
+                    source=self.source,
+                )
+            )
+
+        return results
+
+
+def _extract_part_number(text: str) -> str:
+    """尝试从文本中提取元器件型号。"""
+    # 常见型号模式：字母+数字组合，如 STM32F103C8T6, LM7805, TPS54331
+    match = re.search(r'\b([A-Z]{1,5}\d{2,}[A-Z0-9\-]*)\b', text, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _extract_manufacturer(name: str, snippet: str) -> str:
+    """尝试从标题和摘要中提取制造商。"""
+    known_manufacturers = [
+        "Texas Instruments", "TI", "STMicroelectronics", "ST", "NXP",
+        "Microchip", "Analog Devices", "ON Semiconductor", "onsemi",
+        "Infineon", "Renesas", "ROHM", "Vishay", "Murata", "TDK",
+        "Samsung", "Nexperia", "Maxim", "Diodes Inc",
+    ]
+    combined = f"{name} {snippet}"
+    for mfr in known_manufacturers:
+        if mfr.lower() in combined.lower():
+            return mfr
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -191,12 +295,18 @@ class DigiKeyClient(BaseClient):
 
 def get_clients(source: DataSource = DataSource.ALL) -> list[BaseClient]:
     """根据数据源返回对应客户端列表。"""
+    if source == DataSource.BING:
+        return [BingSearchClient()]
     if source == DataSource.MOUSER:
         return [MouserClient()]
     if source == DataSource.DIGIKEY:
         return [DigiKeyClient()]
 
+    # ALL: Bing 作为基础数据源，Mouser/DigiKey 有 key 时加入
     clients: list[BaseClient] = []
+    bing = BingSearchClient()
+    if bing.available:
+        clients.append(bing)
     mouser = MouserClient()
     if mouser.available:
         clients.append(mouser)
