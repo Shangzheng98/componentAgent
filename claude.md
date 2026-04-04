@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-一个 MCP Server，支持跨 LCSC / DigiKey / Mouser 搜索电子元器件，提供参数筛选、替代料推荐和 BOM 智能分析。
+一个 MCP Server，支持跨 Bing Search / DigiKey / Mouser 搜索电子元器件，提供参数查询、替代料推荐和需求驱动推荐。
 
 ## 架构
 
@@ -14,33 +14,33 @@ src/
 └── formatters.py  ← Markdown / JSON 格式化器
 ```
 
-## 5 个 MCP 工具
+## 4 个 MCP 工具
 
 | 工具名 | 功能 | 只读 |
 |--------|------|------|
-| `component_search` | 关键字搜索，支持品类/封装/厂商筛选 | ✅ |
-| `component_detail` | 按料号获取完整参数和价格 | ✅ |
-| `component_find_alternatives` | 替代料推荐（匹配参数和封装） | ✅ |
-| `bom_analyze` | BOM 分析：匹配/核价/库存/替代 | ✅ |
-| `component_compare` | 多料号并排对比 | ✅ |
+| `search_components` | 关键字搜索，支持多数据源 | ✅ |
+| `get_component_detail` | 按料号获取完整参数和价格 | ✅ |
+| `recommend_components` | 根据需求描述推荐元器件，按库存/价格排序 | ✅ |
+| `find_alternatives` | 查找替代料（DigiKey 使用官方 Substitutions API） | ✅ |
 
 ## API 客户端
 
 | 数据源 | 客户端类 | 认证方式 | 环境变量 |
 |--------|----------|----------|----------|
-| LCSC (免费) | `LCSCClient` | 无需 key，非官方 API | — |
+| Bing Search | `BingSearchClient` | API Key in header | `BING_API_KEY` |
 | DigiKey | `DigiKeyClient` | OAuth 2.0 Client Credentials | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` |
 | Mouser | `MouserClient` | API Key in query string | `MOUSER_API_KEY` |
 
-**降级策略**: 未配置 key 的数据源会静默跳过，至少 LCSC 始终可用。
+**降级策略**: 未配置 key 的数据源会静默跳过；Bing 作为基础数据源，DigiKey/Mouser 有 key 时加入。
 
 ## 关键 API 端点
 
-- LCSC: `GET https://wwwapi.lcsc.com/v1/search/global-search?keyword=xxx`
+- Bing Search: `GET https://api.bing.microsoft.com/v7.0/search`
 - DigiKey Token: `POST https://api.digikey.com/v1/oauth2/token`
-- DigiKey Search: `POST https://api.digikey.com/products/v4/search/keyword`
-- Mouser Search: `POST https://api.mouser.com/api/v2/search/keyword?apiKey=xxx`
-- Mouser Part: `POST https://api.mouser.com/api/v2/search/partnumber?apiKey=xxx`
+- DigiKey Search: `POST https://api.digikey.com/products/v4/search/keyword` (body: `Limit`/`Offset`/`FilterOptionsRequest`)
+- DigiKey Detail: `GET https://api.digikey.com/products/v4/search/{pn}/productdetails`
+- DigiKey Substitutions: `GET https://api.digikey.com/products/v4/search/{pn}/substitutions`
+- Mouser Search: `POST https://api.mouser.com/api/v1/search/keyword?apiKey=xxx`
 
 ## 开发记录
 
@@ -82,15 +82,24 @@ src/
 | /search/categories/{id} | GET | 品类详情 | — |
 | /search/packagetypebyquantity/{pn} | GET | 封装类型 | — |
 
-### 测试状态 ✅ 37 tests (stdlib-only, 无需网络)
-- `tests/test_server.py`: 完整测试（需 pytest + httpx + mcp 依赖）
+### 测试状态 ✅ 4 tests (mocked HTTP, 无需网络)
+- `tests/test_digikey.py`: DigiKey 客户端单元测试（mocked httpx）
 
 ### v0.1.2 (Substitutions 响应修正)
 - 修正 DigiKey `find_alternatives` 中的 Substitutions 响应解析：
   - 字段从 `AssociatedProducts` 改为 Swagger 规范的 `ProductSubstitutes`
   - 每项是 `ProductSubstitute` 简化对象（非完整 Product），独立解析
 - 修复性能 bug：`get_detail(part_number)` 从循环内移到循环外（避免 N 次重复请求）
-- 37 tests ✅
+
+### v0.2.0 (Swagger 对齐 + 新端点接入)
+- LCSC 数据源移除（无法申请 API key），替换为 Bing Search 作为基础数据源
+- 重构为 4 个 MCP 工具（移除 `bom_analyze`/`component_compare`），工具名对齐实现：
+  `search_components` / `get_component_detail` / `recommend_components` / `find_alternatives`
+- 新增 `get_detail()` via `GET /search/{pn}/productdetails`，复用 `_parse_product()` 静态方法
+- 新增 `find_alternatives()` via `GET /search/{pn}/substitutions`，解析 `ProductSubstitutes` 列表
+- 新增 `find_alternatives` MCP 工具，DigiKey 优先使用官方 Substitutions API
+- 所有 DigiKey 请求添加 Locale headers（`X-DIGIKEY-Locale-Site/Language/Currency`）
+- 4 tests ✅（`tests/test_digikey.py`，mocked httpx）
 
 ### 待办
 - [ ] Phase 1: 用户本地部署 + LCSC API 实际验证
