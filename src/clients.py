@@ -289,6 +289,61 @@ class DigiKeyClient(BaseClient):
         except Exception:
             pass
 
+    @staticmethod
+    def _parse_product(item: dict) -> ComponentResult:
+        """Parse a single product dict from DigiKey Swagger v4 response."""
+        # ManufacturerProductNumber (v4) with fallback to old field name
+        part_number = item.get("ManufacturerProductNumber") or item.get("ManufacturerPartNumber") or item.get("DigiKeyPartNumber") or ""
+
+        # Manufacturer is {Id, Name}
+        mfr = item.get("Manufacturer") or {}
+        manufacturer = mfr.get("Name", "") if isinstance(mfr, dict) else str(mfr)
+
+        # Description is a nested object {ProductDescription, DetailedDescription}
+        desc_obj = item.get("Description") or {}
+        if isinstance(desc_obj, dict):
+            description = desc_obj.get("ProductDescription") or desc_obj.get("DetailedDescription") or ""
+        else:
+            description = str(desc_obj)
+
+        # UnitPrice is a top-level double; StandardPricing lives inside ProductVariations[]
+        unit_price: Optional[float] = None
+        raw_unit_price = item.get("UnitPrice")
+        if raw_unit_price is not None:
+            unit_price = _parse_digikey_price(raw_unit_price)
+        if unit_price is None:
+            variations = item.get("ProductVariations") or []
+            if variations and isinstance(variations[0], dict):
+                unit_price = _parse_digikey_price(variations[0].get("StandardPricing"))
+
+        # PackageType is inside ProductVariations[0].PackageType.Name
+        package = ""
+        variations = item.get("ProductVariations") or []
+        if variations and isinstance(variations[0], dict):
+            pkg = variations[0].get("PackageType") or {}
+            package = pkg.get("Name", "") if isinstance(pkg, dict) else str(pkg)
+
+        # Parameters: [{ParameterText, ValueText}, ...]
+        params_list = item.get("Parameters") or []
+        parameters: dict[str, str] = {
+            p["ParameterText"]: p["ValueText"]
+            for p in params_list
+            if isinstance(p, dict) and "ParameterText" in p and "ValueText" in p
+        }
+
+        return ComponentResult(
+            part_number=part_number,
+            manufacturer=manufacturer,
+            description=description,
+            package=package,
+            unit_price=unit_price,
+            stock=_safe_int(item.get("QuantityAvailable")),
+            datasheet_url=item.get("DatasheetUrl") or item.get("PrimaryDatasheet") or "",
+            product_url=item.get("ProductUrl") or "",
+            source="digikey",
+            parameters=parameters,
+        )
+
     async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
         if not self.available:
             return []
@@ -298,14 +353,19 @@ class DigiKeyClient(BaseClient):
 
         payload = {
             "Keywords": keyword,
-            "RecordCount": min(max_results, 20),
-            "RecordStartPosition": 0,
-            "ExcludeMarketPlaceProducts": True,
+            "Limit": min(max_results, 50),
+            "Offset": 0,
+            "FilterOptionsRequest": {
+                "MarketPlaceFilter": "ExcludeMarketPlace",
+            },
         }
         headers = {
             "Authorization": f"Bearer {self._token}",
             "X-DIGIKEY-Client-Id": self._client_id,
             "Content-Type": "application/json",
+            "X-DIGIKEY-Locale-Currency": "USD",
+            "X-DIGIKEY-Locale-Site": "US",
+            "X-DIGIKEY-Locale-Language": "en",
         }
         try:
             resp = await self._http.post(DIGIKEY_SEARCH_URL, json=payload, headers=headers)
@@ -314,24 +374,8 @@ class DigiKeyClient(BaseClient):
         except Exception:
             return []
 
-        results: list[ComponentResult] = []
-        products = data.get("Products") or data.get("ExactManufacturerProducts") or []
-        for item in products[:max_results]:
-            price = _parse_digikey_price(item.get("StandardPricing") or item.get("UnitPrice"))
-            results.append(
-                ComponentResult(
-                    part_number=item.get("ManufacturerPartNumber") or item.get("DigiKeyPartNumber") or "",
-                    manufacturer=item.get("Manufacturer", {}).get("Name", "") if isinstance(item.get("Manufacturer"), dict) else str(item.get("Manufacturer", "")),
-                    description=item.get("ProductDescription") or item.get("DetailedDescription") or "",
-                    package=item.get("PackageType") or "",
-                    unit_price=price,
-                    stock=_safe_int(item.get("QuantityAvailable")),
-                    datasheet_url=item.get("DatasheetUrl") or item.get("PrimaryDatasheet") or "",
-                    product_url=item.get("ProductUrl") or "",
-                    source=self.source,
-                )
-            )
-        return results
+        products = data.get("Products") or data.get("ExactMatches") or []
+        return [self._parse_product(item) for item in products[:max_results]]
 
 
 # ---------------------------------------------------------------------------
