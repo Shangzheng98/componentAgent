@@ -127,3 +127,60 @@ async def test_search_sends_locale_headers(digikey):
     headers = captured_kwargs["headers"]
     assert "X-DIGIKEY-Locale-Currency" in headers
     assert "X-DIGIKEY-Locale-Site" in headers
+
+
+PRODUCT_DETAILS_RESPONSE = {
+    "Product": {
+        "ManufacturerProductNumber": "STM32F103C8T6",
+        "Manufacturer": {"Id": 630, "Name": "STMicroelectronics"},
+        "Description": {
+            "ProductDescription": "IC MCU 32BIT 64KB FLASH 48LQFP",
+            "DetailedDescription": "ARM Cortex-M3 STM32F1 Microcontroller IC",
+        },
+        "UnitPrice": 2.57,
+        "QuantityAvailable": 12345,
+        "DatasheetUrl": "https://example.com/ds.pdf",
+        "ProductUrl": "https://www.digikey.com/product/STM32F103C8T6",
+        "ProductVariations": [
+            {
+                "DigiKeyProductNumber": "497-6164-ND",
+                "PackageType": {"Id": 1, "Name": "Tape & Reel"},
+                "StandardPricing": [
+                    {"BreakQuantity": 1, "UnitPrice": 2.57, "TotalPrice": 2.57},
+                ],
+            }
+        ],
+        "Parameters": [
+            {"ParameterId": 1, "ValueText": "ARM Cortex-M3", "ParameterText": "Core Processor"},
+            {"ParameterId": 2, "ValueText": "64KB", "ParameterText": "Program Memory Size"},
+            {"ParameterId": 3, "ValueText": "20KB", "ParameterText": "RAM Size"},
+        ],
+        "ProductStatus": {"Id": 0, "Status": "Active"},
+    },
+    "SearchLocaleUsed": {"Site": "US", "Language": "en", "Currency": "USD"},
+}
+
+
+@pytest.mark.asyncio
+async def test_get_detail_calls_productdetails_endpoint(digikey):
+    """get_detail() should use GET /search/{pn}/productdetails."""
+    captured_url = {}
+
+    async def mock_get(url, **kwargs):
+        captured_url["url"] = url
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = PRODUCT_DETAILS_RESPONSE
+        resp.raise_for_status = lambda: None
+        return resp
+
+    digikey._http.get = mock_get
+    result = await digikey.get_detail("STM32F103C8T6")
+    assert result is not None
+    assert "productdetails" in captured_url["url"]
+    assert result.part_number == "STM32F103C8T6"
+    assert result.manufacturer == "STMicroelectronics"
+    assert result.description == "IC MCU 32BIT 64KB FLASH 48LQFP"
+    assert result.stock == 12345
+    assert result.parameters["Core Processor"] == "ARM Cortex-M3"
+    assert result.parameters["Program Memory Size"] == "64KB"

@@ -34,6 +34,9 @@ class BaseClient(ABC):
     async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
         return None
 
+    async def find_alternatives(self, part_number: str) -> list[ComponentResult]:
+        return []
+
 
 # ---------------------------------------------------------------------------
 # Bing Search 客户端（元器件垂直搜索）
@@ -254,6 +257,8 @@ class MouserClient(BaseClient):
 
 DIGIKEY_TOKEN_URL = "https://api.digikey.com/v1/oauth2/token"
 DIGIKEY_SEARCH_URL = "https://api.digikey.com/products/v4/search/keyword"
+DIGIKEY_DETAIL_URL = "https://api.digikey.com/products/v4/search/{pn}/productdetails"
+DIGIKEY_SUBSTITUTIONS_URL = "https://api.digikey.com/products/v4/search/{pn}/substitutions"
 
 
 class DigiKeyClient(BaseClient):
@@ -344,6 +349,33 @@ class DigiKeyClient(BaseClient):
             parameters=parameters,
         )
 
+    async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
+        if not self.available:
+            return None
+        await self._ensure_token()
+        if not self._token:
+            return None
+
+        url = DIGIKEY_DETAIL_URL.format(pn=part_number)
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "X-DIGIKEY-Client-Id": self._client_id,
+            "X-DIGIKEY-Locale-Currency": "USD",
+            "X-DIGIKEY-Locale-Site": "US",
+            "X-DIGIKEY-Locale-Language": "en",
+        }
+        try:
+            resp = await self._http.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return None
+
+        product = data.get("Product")
+        if not product:
+            return None
+        return self._parse_product(product)
+
     async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
         if not self.available:
             return []
@@ -376,6 +408,43 @@ class DigiKeyClient(BaseClient):
 
         products = data.get("Products") or data.get("ExactMatches") or []
         return [self._parse_product(item) for item in products[:max_results]]
+
+    async def find_alternatives(self, part_number: str) -> list[ComponentResult]:
+        if not self.available:
+            return []
+        await self._ensure_token()
+        if not self._token:
+            return []
+        url = DIGIKEY_SUBSTITUTIONS_URL.format(pn=part_number)
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "X-DIGIKEY-Client-Id": self._client_id,
+            "X-DIGIKEY-Locale-Currency": "USD",
+            "X-DIGIKEY-Locale-Site": "US",
+            "X-DIGIKEY-Locale-Language": "en",
+        }
+        try:
+            resp = await self._http.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return []
+        results: list[ComponentResult] = []
+        for item in data.get("ProductSubstitutes") or []:
+            mfr = item.get("Manufacturer") or {}
+            manufacturer = mfr.get("Name", "") if isinstance(mfr, dict) else str(mfr)
+            results.append(
+                ComponentResult(
+                    part_number=item.get("ManufacturerProductNumber") or "",
+                    manufacturer=manufacturer,
+                    description=item.get("Description") or "",
+                    unit_price=_safe_float(item.get("UnitPrice")),
+                    stock=_safe_int(item.get("QuantityAvailable")),
+                    product_url=item.get("ProductUrl") or "",
+                    source="digikey",
+                )
+            )
+        return results
 
 
 # ---------------------------------------------------------------------------
