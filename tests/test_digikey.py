@@ -184,3 +184,53 @@ async def test_get_detail_calls_productdetails_endpoint(digikey):
     assert result.stock == 12345
     assert result.parameters["Core Processor"] == "ARM Cortex-M3"
     assert result.parameters["Program Memory Size"] == "64KB"
+
+
+SUBSTITUTIONS_RESPONSE = {
+    "ProductSubstitutesCount": 2,
+    "ProductSubstitutes": [
+        {
+            "SubstituteType": "Suggested",
+            "ManufacturerProductNumber": "STM32F103CBT6",
+            "Manufacturer": {"Id": 630, "Name": "STMicroelectronics"},
+            "Description": "IC MCU 32BIT 128KB FLASH 48LQFP",
+            "UnitPrice": "3.15",
+            "QuantityAvailable": 8000,
+            "DigiKeyProductNumber": "497-6165-ND",
+            "ProductUrl": "https://www.digikey.com/product/STM32F103CBT6",
+        },
+        {
+            "SubstituteType": "Suggested",
+            "ManufacturerProductNumber": "STM32F103RCT6",
+            "Manufacturer": {"Id": 630, "Name": "STMicroelectronics"},
+            "Description": "IC MCU 32BIT 256KB FLASH 64LQFP",
+            "UnitPrice": "4.20",
+            "QuantityAvailable": 5000,
+            "DigiKeyProductNumber": "497-6166-ND",
+            "ProductUrl": "https://www.digikey.com/product/STM32F103RCT6",
+        },
+    ],
+    "SearchLocaleUsed": {"Site": "US", "Language": "en", "Currency": "USD"},
+}
+
+
+@pytest.mark.asyncio
+async def test_find_alternatives_calls_substitutions_endpoint(digikey):
+    captured_url = {}
+
+    async def mock_get(url, **kwargs):
+        captured_url["url"] = url
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = SUBSTITUTIONS_RESPONSE
+        resp.raise_for_status = lambda: None
+        return resp
+
+    digikey._http.get = mock_get
+    results = await digikey.find_alternatives("STM32F103C8T6")
+    assert "substitutions" in captured_url["url"]
+    assert len(results) == 2
+    assert results[0].part_number == "STM32F103CBT6"
+    assert results[0].manufacturer == "STMicroelectronics"
+    assert results[0].stock == 8000
+    assert results[1].part_number == "STM32F103RCT6"

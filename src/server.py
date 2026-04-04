@@ -12,7 +12,7 @@ from .models import ComponentDetailInput, ComponentResult, ComponentSearchInput,
 
 mcp = FastMCP(
     "component-search",
-    description="电子元器件垂直搜索服务 — 支持 Bing Search / Mouser / DigiKey 多源查询",
+    instructions="电子元器件垂直搜索服务 — 支持 Bing Search / Mouser / DigiKey 多源查询",
 )
 
 
@@ -168,6 +168,46 @@ async def recommend_components(
         {
             "message": f"为 '{requirement}' 推荐 {len(recommended)} 款元器件",
             "recommendations": [r.model_dump() for r in recommended],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool: find_alternatives — 查找替代料
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def find_alternatives(
+    part_number: str,
+    source: str = "all",
+) -> str:
+    """查找元器件替代料。
+
+    根据物料编号查找官方推荐的替代料（pin-compatible 或功能兼容）。
+    DigiKey 数据源使用官方 Substitutions API，其他数据源通过关键字搜索。
+
+    Args:
+        part_number: 物料编号，例如 "STM32F103C8T6"
+        source: 数据源 (bing / mouser / digikey / all)，默认 all
+    """
+    clients = get_clients(DataSource(source))
+    all_results: list[ComponentResult] = []
+    for client in clients:
+        results = await client.find_alternatives(part_number)
+        all_results.extend(results)
+        await client.close()
+    if not all_results:
+        return json.dumps(
+            {"message": f"未找到 {part_number} 的替代料", "alternatives": []},
+            ensure_ascii=False,
+        )
+    return json.dumps(
+        {
+            "message": f"找到 {len(all_results)} 款 {part_number} 的替代料",
+            "alternatives": [r.model_dump() for r in all_results],
         },
         ensure_ascii=False,
         indent=2,
