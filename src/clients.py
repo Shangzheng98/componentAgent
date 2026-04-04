@@ -5,11 +5,16 @@ from __future__ import annotations
 import os
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 import httpx
+from dotenv import load_dotenv
 
 from .models import ComponentResult, DataSource
+
+# 每次导入时从项目根目录加载 .env（不覆盖已有环境变量）
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # 基类
@@ -192,6 +197,7 @@ def _extract_manufacturer(name: str, snippet: str) -> str:
 # ---------------------------------------------------------------------------
 
 MOUSER_SEARCH_URL = "https://api.mouser.com/api/v1/search/keyword"
+MOUSER_PARTNUMBER_URL = "https://api.mouser.com/api/v1/search/partnumber"
 
 
 class MouserClient(BaseClient):
@@ -207,14 +213,54 @@ class MouserClient(BaseClient):
     def available(self) -> bool:
         return bool(self._api_key)
 
-    async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
-        if not self.available:
-            return []
+    @staticmethod
+    def _parse_product(item: dict) -> ComponentResult:
+        """解析单个 MouserPart 对象。"""
+        # 解析 ProductAttributes → parameters + package
+        params: dict[str, str] = {}
+        package = ""
+        for attr in item.get("ProductAttributes") or []:
+            name = attr.get("AttributeName", "")
+            value = attr.get("AttributeValue", "")
+            if name and value:
+                params[name] = value
+                if "package" in name.lower() or "case" in name.lower():
+                    package = value
 
+        # 补充生命周期、交期等信息到 parameters
+        for key in ("LifecycleStatus", "LeadTime", "ROHSStatus"):
+            val = item.get(key)
+            if val:
+                params[key] = str(val)
+        if item.get("Min"):
+            params["MinOrderQty"] = str(item["Min"])
+        if item.get("Mult"):
+            params["MultOrderQty"] = str(item["Mult"])
+
+        # 库存优先用 AvailabilityInStock（纯数字），fallback 到 Availability 字符串
+        stock_val = item.get("AvailabilityInStock")
+        if not stock_val:
+            stock_val = (item.get("Availability") or "").replace(" In Stock", "").replace(",", "")
+
+        return ComponentResult(
+            part_number=item.get("ManufacturerPartNumber") or item.get("MouserPartNumber") or "",
+            manufacturer=item.get("Manufacturer") or "",
+            description=item.get("Description") or "",
+            package=package,
+            unit_price=_parse_mouser_price(item.get("PriceBreaks") or []),
+            stock=_safe_int(stock_val),
+            datasheet_url=item.get("DataSheetUrl") or "",
+            product_url=item.get("ProductDetailUrl") or "",
+            source="mouser",
+            parameters=params,
+        )
+
+    async def _search_keyword(self, keyword: str, max_results: int) -> list[dict]:
+        """调用 keyword 搜索，返回原始 Parts 列表。"""
         payload = {
             "SearchByKeywordRequest": {
                 "keyword": keyword,
-                "records": min(max_results, 20),
+                "records": min(max_results, 50),
                 "startingRecord": 0,
                 "searchOptions": "",
                 "searchWithYourSignUpLanguage": "",
@@ -230,24 +276,83 @@ class MouserClient(BaseClient):
             data = resp.json()
         except Exception:
             return []
+        return (data.get("SearchResults") or {}).get("Parts") or []
+
+    async def _search_partnumber(self, part_number: str) -> list[dict]:
+        """调用 partnumber 精确搜索，返回原始 Parts 列表。"""
+        payload = {
+            "SearchByPartRequest": {
+                "mouserPartNumber": part_number,
+                "partSearchOptions": "Exact",
+            }
+        }
+        try:
+            resp = await self._http.post(
+                f"{MOUSER_PARTNUMBER_URL}?apiKey={self._api_key}",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return []
+        return (data.get("SearchResults") or {}).get("Parts") or []
+
+    async def search(self, keyword: str, max_results: int = 5) -> list[ComponentResult]:
+        if not self.available:
+            return []
+        parts = await self._search_keyword(keyword, max_results)
+        return [self._parse_product(item) for item in parts[:max_results]]
+
+    async def get_detail(self, part_number: str) -> Optional[ComponentResult]:
+        """按料号精确搜索获取完整产品详情，并抓取产品页面补充参数。"""
+        if not self.available:
+            return None
+        parts = await self._search_partnumber(part_number)
+        if not parts:
+            return None
+        result = self._parse_product(parts[0])
+
+        # 如果 API 返回的参数较少，抓取产品页面补充
+        if result.product_url and len(result.parameters) < 5:
+            from .parsers import parse_product_page
+            parsed = await parse_product_page(result.product_url, part_number)
+            # 页面解析的参数补充到 API 结果中（API 优先，不覆盖）
+            for k, v in parsed.parameters.items():
+                if k not in result.parameters:
+                    result.parameters[k] = v
+            if not result.package and parsed.package:
+                result.package = parsed.package
+            if not result.datasheet_url and parsed.datasheet_url:
+                result.datasheet_url = parsed.datasheet_url
+
+        return result
+
+    async def find_alternatives(self, part_number: str) -> list[ComponentResult]:
+        """通过 SuggestedReplacement 字段查找替代料。"""
+        if not self.available:
+            return []
+        parts = await self._search_partnumber(part_number)
+        if not parts:
+            return []
 
         results: list[ComponentResult] = []
-        parts = (data.get("SearchResults") or {}).get("Parts") or []
-        for item in parts[:max_results]:
-            price = _parse_mouser_price(item.get("PriceBreaks") or [])
-            results.append(
-                ComponentResult(
-                    part_number=item.get("ManufacturerPartNumber") or item.get("MouserPartNumber") or "",
-                    manufacturer=item.get("Manufacturer") or "",
-                    description=item.get("Description") or "",
-                    package=item.get("Mfr") or "",
-                    unit_price=price,
-                    stock=_safe_int(item.get("Availability", "").replace(" In Stock", "").replace(",", "")),
-                    datasheet_url=item.get("DataSheetUrl") or "",
-                    product_url=item.get("ProductDetailUrl") or "",
-                    source=self.source,
-                )
-            )
+        for item in parts:
+            suggested = item.get("SuggestedReplacement") or ""
+            if suggested and suggested != part_number:
+                # 搜索推荐的替代料号获取完整信息
+                alt_parts = await self._search_partnumber(suggested)
+                if alt_parts:
+                    results.append(self._parse_product(alt_parts[0]))
+
+            # AlternatePackagings 也是替代选项
+            for alt in item.get("AlternatePackagings") or []:
+                alt_pn = alt.get("ManufacturerPartNumber") or alt.get("MouserPartNumber") or ""
+                if alt_pn and alt_pn != part_number:
+                    alt_parts = await self._search_partnumber(alt_pn)
+                    if alt_parts:
+                        results.append(self._parse_product(alt_parts[0]))
+
         return results
 
 
